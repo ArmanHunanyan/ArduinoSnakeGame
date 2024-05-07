@@ -122,9 +122,9 @@ public:
     {
     public:
         virtual ~Listner() { }
-        virtual void onKeyPress(Keypad::Button idx) = 0;
-        virtual void onKeyLongPress(Keypad::Button idx) = 0;
-        virtual void onKeyRelease(Keypad::Button idx) = 0;
+        virtual void onKeyPress(Keypad::Button btn) = 0;
+        virtual void onKeyLongPress(Keypad::Button btn) = 0;
+        virtual void onKeyRelease(Keypad::Button btn) = 0;
     };
 
     class IdleListner
@@ -137,6 +137,7 @@ public:
 public:
     Keypad()
         : m_listner(nullptr)
+        , m_idleListner(nullptr)
     {
     }
 
@@ -168,11 +169,7 @@ public:
             return;
         }
         if (m_idleStart == ULONG_MAX) {
-            if (oldState != newState) {
-                m_idleStart = 0;
-            } else {
-                // Do nothing. Idle already notifyed.
-            }
+            // Do nothing. Idle already notifyed.
         } else {
             const unsigned long idleTime = curr - m_idleStart;
             if (idleTime > MaxIdleTime) {
@@ -187,20 +184,23 @@ public:
     void loopImpl(ButtonSet oldState, ButtonSet newState)
     {
         updateIdle(oldState, newState);
+        /* There is no need for special handling after the idle event.
+           If a idle has happened, then oldState == newState.
+           Nothing will be executed below */
         auto curr = millis();
         if (m_listner != nullptr) {
             ButtonSet justPressed = newState.notIn(oldState);
-            justPressed.forEach([this, curr](Button idx) {
-                    m_btnPressTimes[uint8_t(idx)] = curr;
+            justPressed.forEach([this, curr](Button btn) {
+                    m_buttonPressTime[uint8_t(idx)] = curr;
                     m_listner->onKeyPress(idx);
                 });
-            justPressed.difference(newState).forEach([this, curr] (Button idx) {
-                    if (curr - m_btnPressTimes[uint8_t(idx)] > MaxPressTime) {
+            justPressed.difference(newState).forEach([this, curr] (Button btn) {
+                    if (curr - m_buttonPressTime[uint8_t(idx)] > MaxPressTime) {
                         m_listner->onKeyLongPress(idx);
                     }
                 });
             ButtonSet justReleased = oldState.notIn(newState);
-            justReleased.forEach([this] (Button idx) {
+            justReleased.forEach([this] (Button btn) {
                     m_listner->onKeyRelease(idx);
                 });
         }
@@ -209,8 +209,8 @@ public:
     void loop()
     {
         ButtonSet newState = ButtonSet::read();
-        loopImpl(m_state, newState);
-        m_state = newState;
+        loopImpl(m_prevState, newState);
+        m_prevState = newState;
     }
 
     void prepareSleep()
@@ -226,9 +226,9 @@ public:
 private:
     Listner *m_listner;
     IdleListner *m_idleListner;
-    ButtonSet m_state;
+    ButtonSet m_prevState;
     unsigned long m_idleStart;
-    unsigned long m_btnPressTimes[5];
+    unsigned long m_buttonPressTime[5];
 };
 
 class Screen
@@ -549,17 +549,17 @@ private:
         console.screen().clear();
     }
 
-    virtual void onKeyPress(Keypad::Button idx) override
+    virtual void onKeyPress(Keypad::Button btn) override
     {
         exit();
     }
 
-    virtual void onKeyLongPress(Keypad::Button idx) override
+    virtual void onKeyLongPress(Keypad::Button btn) override
     {
         exit();
     }
 
-    virtual void onKeyRelease(Keypad::Button idx) override
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
         exit();
     }
@@ -759,18 +759,18 @@ private:
         loopEvery(500);
     }
 
-    virtual void onKeyPress(Keypad::Button idx) override
+    virtual void onKeyPress(Keypad::Button btn) override
     {
         if (idx == Keypad::Button::Center) {
             exit();
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button idx) override
+    virtual void onKeyLongPress(Keypad::Button btn) override
     {
     }
 
-    virtual void onKeyRelease(Keypad::Button idx) override
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
     }
 
@@ -942,7 +942,7 @@ private:
         console.screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
     }
 
-    virtual void onKeyPress(Keypad::Button idx) override
+    virtual void onKeyPress(Keypad::Button btn) override
     {
         if (idx == Keypad::Button::Center) {
             console.scheduleApplication(m_pauseGameApp);
@@ -966,7 +966,7 @@ private:
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button idx) override
+    virtual void onKeyLongPress(Keypad::Button btn) override
     {
         if (idx == Keypad::Button::Center) {
             return;
@@ -977,7 +977,7 @@ private:
         loopEvery(50);
     }
 
-    virtual void onKeyRelease(Keypad::Button idx) override
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
         loopEvery(320);
     }
@@ -1089,21 +1089,21 @@ private:
         m_frame = 0;
     }
 
-    virtual void onKeyPress(Keypad::Button idx) override
+    virtual void onKeyPress(Keypad::Button btn) override
     {
         if (m_frame > 6) {
             exit();
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button idx) override
+    virtual void onKeyLongPress(Keypad::Button btn) override
     {
         if (m_frame > 6) {
             exit();
         }
     }
 
-    virtual void onKeyRelease(Keypad::Button idx) override
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
         if (m_frame > 6) {
             exit();
@@ -1189,7 +1189,7 @@ private:
         m_frame = 0;
     }
 
-    virtual void onKeyPress(Keypad::Button idx) override
+    virtual void onKeyPress(Keypad::Button btn) override
     {
         if (idx == Keypad::Button::Center) {
             continueToSnakeGame();
@@ -1198,11 +1198,11 @@ private:
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button idx) override
+    virtual void onKeyLongPress(Keypad::Button btn) override
     {
     }
 
-    virtual void onKeyRelease(Keypad::Button idx) override
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
     }
 
