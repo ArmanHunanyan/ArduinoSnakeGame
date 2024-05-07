@@ -56,10 +56,19 @@ enum class Direction : uint8_t {
     Center = 2
 };
 
-
 constexpr Direction opposite(Direction direction) { return Direction(uint8_t(4) - uint8_t(direction));}
 
 constexpr uint8_t mask(Direction direction) { return uint8_t(1) << uint8_t(direction);}
+
+class ShellObject
+{
+public:
+    virtual ~ShellObject() { }
+    virtual void onSetup() = 0;
+    virtual void onLoop() = 0;
+    virtual void onPrepareSleep() = 0;
+    virtual void onWakeUp() = 0;
+};
 
 class Keypad
 {
@@ -122,9 +131,53 @@ public:
     {
     public:
         virtual ~Listner() { }
+
+        void notifyKeyPress(Keypad::Button btn)
+        {
+            if (m_flags & EventKeyPress) {
+                onKeyPress(btn);
+            }
+        }
+        
+        void notifyLongKeyPress(Keypad::Button btn)
+        {
+            if (m_flags & EventLongKeyPress) {
+                onLongKeyPress(btn);
+            }
+        }
+
+        void notifyKeyRelease(Keypad::Button btn)
+        {
+            if (m_flags & EventKeyRelease) {
+                onKeyRelease(btn);
+            }
+        }
+
+    private:
         virtual void onKeyPress(Keypad::Button btn) = 0;
-        virtual void onKeyLongPress(Keypad::Button btn) = 0;
+        virtual void onLongKeyPress(Keypad::Button btn) = 0;
         virtual void onKeyRelease(Keypad::Button btn) = 0;
+
+    private:
+        uint8_t m_flags = 0;
+
+    protected:
+        enum EventFlags : uint8_t {
+            EventKeyPress = 1,
+            EventLongKeyPress = 2,
+            EventKeyRelease = 4,
+            AllEvents = EventKeyPress | EventLongKeyPress | EventKeyRelease
+        };
+
+        void enableEvent(uint8_t flags)
+        {
+            m_flags |= flags;
+        }
+
+        void disableEvent(uint8_t flags)
+        {
+            m_flags &= ~(flags);
+        }
     };
 
     class IdleListner
@@ -191,17 +244,18 @@ public:
         if (m_listner != nullptr) {
             ButtonSet justPressed = newState.notIn(oldState);
             justPressed.forEach([this, curr](Button btn) {
-                    m_buttonPressTime[uint8_t(idx)] = curr;
-                    m_listner->onKeyPress(idx);
+                    m_buttonPressTime[uint8_t(btn)] = curr;
+                    m_listner->notifyKeyPress(btn);
                 });
-            justPressed.difference(newState).forEach([this, curr] (Button btn) {
-                    if (curr - m_buttonPressTime[uint8_t(idx)] > MaxPressTime) {
-                        m_listner->onKeyLongPress(idx);
+            ButtonSet longTimePressed = justPressed.difference(newState);
+            longTimePressed.forEach([this, curr] (Button btn) {
+                    if (curr - m_buttonPressTime[uint8_t(btn)] > MaxPressTime) {
+                        m_listner->notifyLongKeyPress(btn);
                     }
                 });
             ButtonSet justReleased = oldState.notIn(newState);
             justReleased.forEach([this] (Button btn) {
-                    m_listner->onKeyRelease(idx);
+                    m_listner->notifyKeyRelease(btn);
                 });
         }
     }
@@ -316,7 +370,7 @@ private:
     bool m_modified;
 };
 
-class Console;
+class Shell;
 
 class Application
     : public Keypad::Listner
@@ -389,31 +443,31 @@ private:
 
 void weakupInterrupt();
 
-class Console
+class Shell
 {
 private:
     class IdleListner
         : public Keypad::IdleListner
     {
     public:
-        IdleListner(Console* console)
-            : m_console(console)
+        IdleListner(Shell* shell)
+            : m_shell(shell)
         { }
 
         virtual void onIdle()
         {
-            m_console->goToSleep();
+            m_shell->goToSleep();
         }
 
         void setup()
         {
         }
     private:
-        Console *m_console;
+        Shell *m_shell;
     };
 
 public:
-    Console()
+    Shell()
         : m_idleListner(this)
     {
         m_keypad.setIdleListner(&m_idleListner);
@@ -526,7 +580,7 @@ private:
     bool m_sleepInitiated = false;
 };
 
-Console console; 
+Shell shell; 
 
 static PROGMEM const uint8_t X_bitmap[] = {B10010000, B01100000, B01100000, B10010000};
 static PROGMEM const uint8_t O_bitmap[] = {B11000000, B11000000};
@@ -544,9 +598,10 @@ public:
 private:
     virtual void onStartup() override
     {
+        Keypad::Listner::enableEvent(AllEvents);
         m_frame = 0;
         loopEvery(500);
-        console.screen().clear();
+        shell.screen().clear();
     }
 
     virtual void onKeyPress(Keypad::Button btn) override
@@ -554,7 +609,7 @@ private:
         exit();
     }
 
-    virtual void onKeyLongPress(Keypad::Button btn) override
+    virtual void onLongKeyPress(Keypad::Button btn) override
     {
         exit();
     }
@@ -576,10 +631,10 @@ private:
 
     void draw(bool a, bool r, bool m, bool o)
     {
-        if (a) console.screen().drawChar(1, 0, 'A', 1);
-        if (r) console.screen().drawChar(10, 0, 'R', 1);
-        if (m) console.screen().drawChar(1, 9, 'M', 1);
-        if (o) console.screen().drawChar(10, 9, 'O', 1);
+        if (a) shell.screen().drawChar(1, 0, 'A', 1);
+        if (r) shell.screen().drawChar(10, 0, 'R', 1);
+        if (m) shell.screen().drawChar(1, 9, 'M', 1);
+        if (o) shell.screen().drawChar(10, 9, 'O', 1);
     }
 
     virtual void onLoop() override
@@ -594,15 +649,15 @@ private:
             draw(true, true, true, true);
             loopEvery(250);
         } else if (m_frame == 4) {
-            console.screen().clear();
+            shell.screen().clear();
         } else if (m_frame == 5) {
             draw(true, true, true, true);
         } else if (m_frame == 6) {
-            console.screen().clear();
+            shell.screen().clear();
         } else if (m_frame == 7) {
             draw(true, true, true, true);
         } else if (m_frame == 8) {
-            console.screen().clear();
+            shell.screen().clear();
         } else if (m_frame == 9) {
             draw(true, true, true, true);
         } else {
@@ -613,7 +668,8 @@ private:
 
     void exit()
     {
-        console.scheduleApplication(m_next);
+        Keypad::Listner::disableEvent(AllEvents);
+        shell.scheduleApplication(m_next);
     }
 
     virtual void onShutdown() override
@@ -755,18 +811,19 @@ public:
 private:
     virtual void onStartup() override
     {
-        console.screen().clear();
+        Keypad::Listner::enableEvent(AllEvents);
+        shell.screen().clear();
         loopEvery(500);
     }
 
     virtual void onKeyPress(Keypad::Button btn) override
     {
-        if (idx == Keypad::Button::Center) {
+        if (btn == Keypad::Button::Center) {
             exit();
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button btn) override
+    virtual void onLongKeyPress(Keypad::Button btn) override
     {
     }
 
@@ -776,45 +833,46 @@ private:
 
     virtual void onLoop() override
     {
-        console.screen().clear();
+        shell.screen().clear();
         for (int x = 0; x < 2; ++x) {
             for (int y = 0; y < 2; ++y) {
-                console.screen().drawPixel(7 + x, y, HIGH);
-                console.screen().drawPixel(7 + x, 14 + y, HIGH);
-                console.screen().drawPixel(x, 7 + y, HIGH);
-                console.screen().drawPixel(14 + x, 7 + y, HIGH);
+                shell.screen().drawPixel(7 + x, y, HIGH);
+                shell.screen().drawPixel(7 + x, 14 + y, HIGH);
+                shell.screen().drawPixel(x, 7 + y, HIGH);
+                shell.screen().drawPixel(14 + x, 7 + y, HIGH);
             }
         }
         if (m_frame == 0) {
-            console.screen().drawPixel(7, 7, HIGH);
-            console.screen().drawPixel(7, 8, HIGH);
-            console.screen().drawPixel(8, 7, HIGH);
-            console.screen().drawPixel(8, 8, HIGH);
+            shell.screen().drawPixel(7, 7, HIGH);
+            shell.screen().drawPixel(7, 8, HIGH);
+            shell.screen().drawPixel(8, 7, HIGH);
+            shell.screen().drawPixel(8, 8, HIGH);
         } else if (m_frame == 1) {
-            console.screen().drawPixel(6, 7, HIGH);
-            console.screen().drawPixel(6, 8, HIGH);
-            console.screen().drawPixel(9, 7, HIGH);
-            console.screen().drawPixel(9, 8, HIGH);
-            console.screen().drawPixel(7, 6, HIGH);
-            console.screen().drawPixel(7, 9, HIGH);
-            console.screen().drawPixel(8, 6, HIGH);
-            console.screen().drawPixel(8, 9, HIGH);
+            shell.screen().drawPixel(6, 7, HIGH);
+            shell.screen().drawPixel(6, 8, HIGH);
+            shell.screen().drawPixel(9, 7, HIGH);
+            shell.screen().drawPixel(9, 8, HIGH);
+            shell.screen().drawPixel(7, 6, HIGH);
+            shell.screen().drawPixel(7, 9, HIGH);
+            shell.screen().drawPixel(8, 6, HIGH);
+            shell.screen().drawPixel(8, 9, HIGH);
         } else if (m_frame == 2) {
-            console.screen().drawPixel(5, 7, HIGH);
-            console.screen().drawPixel(5, 8, HIGH);
-            console.screen().drawPixel(10, 7, HIGH);
-            console.screen().drawPixel(10, 8, HIGH);
-            console.screen().drawPixel(7, 5, HIGH);
-            console.screen().drawPixel(7, 10, HIGH);
-            console.screen().drawPixel(8, 5, HIGH);
-            console.screen().drawPixel(8, 10, HIGH);
+            shell.screen().drawPixel(5, 7, HIGH);
+            shell.screen().drawPixel(5, 8, HIGH);
+            shell.screen().drawPixel(10, 7, HIGH);
+            shell.screen().drawPixel(10, 8, HIGH);
+            shell.screen().drawPixel(7, 5, HIGH);
+            shell.screen().drawPixel(7, 10, HIGH);
+            shell.screen().drawPixel(8, 5, HIGH);
+            shell.screen().drawPixel(8, 10, HIGH);
         }
         m_frame = ++m_frame % 3;
     }
 
     void exit()
     {
-        console.scheduleApplication(m_next);
+        Keypad::Listner::disableEvent(AllEvents);
+        shell.scheduleApplication(m_next);
     }
 
     virtual void onShutdown() override
@@ -905,21 +963,24 @@ private:
 
     virtual void onStartup() override
     {
+        Keypad::Listner::enableEvent(AllEvents);
         startGame();
         m_acceptEventsUntillLoop = true;
     }
 
     void startGame()
     {
-        console.screen().clear();
+        shell.screen().clear();
         loopEvery(320);
-        m_snake.clear();
-        m_snake.push_back(Point(6, 7));
-        m_snake.push_back(Point(7, 7));
-        m_snake.push_back(Point(8, 7));
+        if (!m_doNotReset) {
+            m_snake.clear();
+            m_snake.push_back(Point(6, 7));
+            m_snake.push_back(Point(7, 7));
+            m_snake.push_back(Point(8, 7));
 
-        makeApple();
-        m_direction = MoveDirection::Right;
+            makeApple();
+            m_direction = MoveDirection::Right;
+        }
         drawSnakeAndApple();
     }
 
@@ -937,15 +998,16 @@ private:
     void drawSnakeAndApple()
     {
         for (uint16_t idx = 0; idx < m_snake.size(); ++idx) {
-            console.screen().drawPixel(m_snake[idx].x(), m_snake[idx].y(), HIGH);
+            shell.screen().drawPixel(m_snake[idx].x(), m_snake[idx].y(), HIGH);
         }
-        console.screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
+        shell.screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
     }
 
     virtual void onKeyPress(Keypad::Button btn) override
     {
-        if (idx == Keypad::Button::Center) {
-            console.scheduleApplication(m_pauseGameApp);
+        if (btn == Keypad::Button::Center) {
+            Keypad::Listner::disableEvent(AllEvents);
+            shell.scheduleApplication(m_pauseGameApp);
             return;
         }
 
@@ -953,10 +1015,10 @@ private:
             return;
         }
 
-        if (opposite(MoveDirection(idx)) == m_direction) {
+        if (opposite(btn) == m_direction) {
             return;
         }
-        m_direction = MoveDirection(idx);
+        m_direction = btn;
         uint16_t speed = loopInterval();
         uint16_t timeSince = timeSinceLastLoop();
         if ((timeSince - speed) > (speed / 10)) {
@@ -966,12 +1028,12 @@ private:
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button btn) override
+    virtual void onLongKeyPress(Keypad::Button btn) override
     {
-        if (idx == Keypad::Button::Center) {
+        if (btn == Keypad::Button::Center) {
             return;
         }
-        if (opposite(MoveDirection(idx)) == m_direction) {
+        if (opposite(btn) == m_direction) {
             return;
         }
         loopEvery(50);
@@ -986,12 +1048,12 @@ private:
     {
         Point newPt, oldTail;
         MoveRes moveRes = moveSnake(newPt, oldTail);
-        console.screen().drawPixel(newPt.x(), newPt.y(), HIGH);
+        shell.screen().drawPixel(newPt.x(), newPt.y(), HIGH);
         if (moveRes == MoveRes::Regular) {
-            console.screen().drawPixel(oldTail.x(), oldTail.y(), LOW);
+            shell.screen().drawPixel(oldTail.x(), oldTail.y(), LOW);
         } else if (moveRes == MoveRes::AppleHit) {
             makeApple();
-            console.screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
+            shell.screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
         } else if (moveRes == MoveRes::SelfHit) {
             gameOver();
         }
@@ -1084,7 +1146,8 @@ public:
 private:
     virtual void onStartup() override
     {
-        console.screen().clear();
+        Keypad::Listner::enableEvent(AllEvents);
+        shell.screen().clear();
         loopEvery(400);
         m_frame = 0;
     }
@@ -1096,7 +1159,7 @@ private:
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button btn) override
+    virtual void onLongKeyPress(Keypad::Button btn) override
     {
         if (m_frame > 6) {
             exit();
@@ -1112,7 +1175,7 @@ private:
 
     virtual void onLoop() override
     {
-        console.screen().clear();
+        shell.screen().clear();
         if (m_frame > 6) {
             uint16_t len = m_snake->size();
             char txt[4] = {0, 0, 0, 0};
@@ -1127,12 +1190,12 @@ private:
                 txt[2] = '0' + char(len % 10);
             }
 
-            console.screen().drawCenterText(txt);
+            shell.screen().drawCenterText(txt);
             return;
         }
         for (int idx = 0, cnt = m_snake->size(); idx < cnt; ++idx) {
             Point pt = (*m_snake)[idx];
-            console.screen().drawPixel(pt.x(), pt.y(), m_frame % 2 == 0 ? LOW : HIGH);
+            shell.screen().drawPixel(pt.x(), pt.y(), m_frame % 2 == 0 ? LOW : HIGH);
         }
         ++m_frame;
         loopEvery(loopInterval() - (loopInterval() / 10));
@@ -1140,7 +1203,8 @@ private:
 
     void exit()
     {
-        console.scheduleApplication(m_nextApp);
+        Keypad::Listner::disableEvent(AllEvents);
+        shell.scheduleApplication(m_nextApp);
     }
 
     virtual void onShutdown() override
@@ -1163,8 +1227,9 @@ private:
 
 void SnakeGameApplication::gameOver()
 {
+    Keypad::Listner::disableEvent(AllEvents);
     m_gameOverApp->setSnake(&m_snake);
-    console.scheduleApplication(m_gameOverApp);
+    shell.scheduleApplication(m_gameOverApp);
 }
 
 class PauseGameApplication
@@ -1184,21 +1249,22 @@ public:
 private:
     virtual void onStartup() override
     {
-        console.screen().clear();
+        Keypad::Listner::enableEvent(AllEvents);
+        shell.screen().clear();
         loopEvery(400);
         m_frame = 0;
     }
 
     virtual void onKeyPress(Keypad::Button btn) override
     {
-        if (idx == Keypad::Button::Center) {
+        if (btn == Keypad::Button::Center) {
             continueToSnakeGame();
         } else {
             exitToMainMenu();
         }
     }
 
-    virtual void onKeyLongPress(Keypad::Button btn) override
+    virtual void onLongKeyPress(Keypad::Button btn) override
     {
     }
 
@@ -1208,24 +1274,26 @@ private:
 
     virtual void onLoop() override
     {
-        console.screen().clear();
-        console.screen().drawBitmap(6, 12, X_bitmap, 4, 4);
-        console.screen().drawBitmap(0, 7, O_bitmap, 2, 2);
-        console.screen().drawBitmap(14, 7, O_bitmap, 2, 2);
-        console.screen().drawBitmap(7, 0, O_bitmap, 2, 2);
-        console.screen().drawBitmap(5, 6, Continue_bitmap, m_frame * 2, 4);
+        shell.screen().clear();
+        shell.screen().drawBitmap(6, 12, X_bitmap, 4, 4);
+        shell.screen().drawBitmap(0, 7, O_bitmap, 2, 2);
+        shell.screen().drawBitmap(14, 7, O_bitmap, 2, 2);
+        shell.screen().drawBitmap(7, 0, O_bitmap, 2, 2);
+        shell.screen().drawBitmap(5, 6, Continue_bitmap, m_frame * 2, 4);
         m_frame = (m_frame + 1) % 4;
     }
 
     void exitToMainMenu()
     {
-        console.scheduleApplication(m_mainMenuApp);
+        Keypad::Listner::disableEvent(AllEvents);
+        shell.scheduleApplication(m_mainMenuApp);
     }
 
     void continueToSnakeGame()
     {
+        Keypad::Listner::disableEvent(AllEvents);
         m_snakeGameApp->doNotReset();
-        console.scheduleApplication(m_snakeGameApp);
+        shell.scheduleApplication(m_snakeGameApp);
     }
 
     virtual void onShutdown() override
@@ -1238,7 +1306,7 @@ private:
 
     virtual void weakup() override
     {
-        console.screen().clear();
+        shell.screen().clear();
     }
 
 private:
@@ -1259,7 +1327,7 @@ public:
         m_snakeApp.setPauseGameApplication(&m_pauseGameApp);
         m_pauseGameApp.setSnakeGameApplication(&m_snakeApp);
         m_pauseGameApp.setMainMenuApplication(&m_mainMenuApp);
-        console.scheduleApplication(&m_welcomeApp);
+        shell.scheduleApplication(&m_welcomeApp);
     }
 
 private:
@@ -1274,16 +1342,16 @@ ApplicationLauncher appLauncher;
 
 void weakupInterrupt()
 {
-    console.weakupNextTime();
+    shell.weakupNextTime();
 }
 
 void setup() {
     Serial.begin(9600);
     Serial.println(F("----------------"));
-    console.setup();
+    shell.setup();
     appLauncher.setup();
 }
 
 void loop() {
-    console.loop();
+    shell.loop();
 }
