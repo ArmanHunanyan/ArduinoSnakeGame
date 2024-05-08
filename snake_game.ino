@@ -524,9 +524,9 @@ public:
             return res;
         }
 
-        if (m_appEvents.size() != 0) {
-            Callable *res = m_appEvents.front();
-            m_appEvents.pop_front();
+        if (m_shellEvents.size() != 0) {
+            Callable *res = m_shellEvents.front();
+            m_shellEvents.pop_front();
             return res;
         }
         return nullptr;
@@ -537,14 +537,14 @@ public:
         m_sysEvents.push_back(event);
     }
 
-    void scheduleAppEvent(Callable* event)
+    void scheduleShellEvent(Callable* event)
     {
-        m_appEvents.push_back(event);
+        m_shellEvents.push_back(event);
     }
 
 private:
     CircularQueue<Callable*, 3> m_sysEvents;
-    CircularQueue<Callable*, 3> m_appEvents;
+    CircularQueue<Callable*, 3> m_shellEvents;
 };
 
 void wakeupInterrupt();
@@ -622,11 +622,8 @@ public:
         Callable *event = popNextEvent();
         if (event != nullptr) {
             event->execute();
+            m_screen.onLoop(); 
             return;
-        }
-        if (m_nextApplication != nullptr) {
-            startApplication(m_nextApplication);
-            m_nextApplication = nullptr;
         }
         m_keypad.onLoop();
         if (m_currentApplication != nullptr) {
@@ -661,24 +658,53 @@ public:
 
     void scheduleApplication(Application *app)
     {
-        m_nextApplication = app;
-    }
+        struct NotifyPrevAppCallable
+            : public Callable
+        {
+            Application *m_app;
+            void setApp(Application* app)
+            {
+                m_app = app;
+            }
 
-    void startApplication(Application *app)
-    {
+            virtual void execute() final override
+            {
+                Shell::instance().m_currentApplication = nullptr;
+                Shell::instance().m_keypad.setListner(nullptr);
+                m_app->shutdown();
+            }
+        };
+        static NotifyPrevAppCallable notifyEvent;
         if (m_currentApplication != nullptr) {
-            m_currentApplication->shutdown();
+            notifyEvent.setApp(m_currentApplication);
+            scheduleShellEvent(&notifyEvent);
         }
-        m_currentApplication = app;
-        m_keypad.setListner(app);
-        m_currentApplication->startup();
+
+        struct StartAppCallable
+            : public Callable
+        {
+            Application *m_app;
+            void setApp(Application* app)
+            {
+                m_app = app;
+            }
+
+            virtual void execute() final override
+            {
+                Shell::instance().m_currentApplication = m_app;
+                Shell::instance().m_currentApplication->startup();
+                Shell::instance().m_keypad.setListner(m_app);
+            }
+        };
+        static StartAppCallable startEvent;
+        startEvent.setApp(app);
+        scheduleShellEvent(&startEvent);
     }
 
 private:
     Screen m_screen;
     Keypad m_keypad;
     Application *m_currentApplication;
-    Application *m_nextApplication = nullptr;
 };
 
 Shell Shell::m_instance;
@@ -1046,11 +1072,16 @@ private:
         Shell::instance().screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
     }
 
+    void schedulePause()
+    {
+        Keypad::Listner::disableEvent(AllEvents);
+        Shell::instance().scheduleApplication(m_pauseGameApp);
+    }
+
     virtual void onKeyPress(Keypad::Button btn) override
     {
         if (btn == Keypad::Button::Center) {
-            Keypad::Listner::disableEvent(AllEvents);
-            Shell::instance().scheduleApplication(m_pauseGameApp);
+            schedulePause();
             return;
         }
 
@@ -1076,10 +1107,9 @@ private:
         if (btn == Keypad::Button::Center) {
             return;
         }
-        if (opposite(btn) == m_direction) {
-            return;
+        if (btn == m_direction) {
+            loopEvery(50);
         }
-        loopEvery(50);
     }
 
     virtual void onKeyRelease(Keypad::Button btn) override
@@ -1159,7 +1189,7 @@ private:
 
     virtual void wakeup() override
     {
-        drawSnakeAndApple();
+        schedulePause();
     }
 
 private:
