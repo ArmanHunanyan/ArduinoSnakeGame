@@ -940,6 +940,7 @@ private:
     {
         Keypad::Listner::disableEvent(AllEvents);
         Shell::instance().scheduleApplication(m_next);
+
     }
 
     virtual void onShutdown() override
@@ -1022,9 +1023,14 @@ public:
         m_pauseGameApp = app;
     }
 
-    void doNotReset()
+    void resetSnake()
     {
-        m_doNotReset = true;
+        m_resetSnake = true;
+    }
+
+    void preserveSnake()
+    {
+        m_resetSnake = false;
     }
 
 private:
@@ -1041,7 +1047,7 @@ private:
     {
         Shell::instance().screen().clear();
         loopEvery(320);
-        if (!m_doNotReset) {
+        if (m_resetSnake) {
             m_snake.clear();
             m_snake.push_back(Point(6, 7));
             m_snake.push_back(Point(7, 7));
@@ -1199,7 +1205,7 @@ private:
     MoveDirection m_direction;
     Point m_apple;
     bool m_acceptEventsUntillLoop = true;
-    bool m_doNotReset = false;
+    bool m_resetSnake = true;
 };
 
 class GameOverApplication
@@ -1302,6 +1308,7 @@ void SnakeGameApplication::gameOver()
 {
     Keypad::Listner::disableEvent(AllEvents);
     m_gameOverApp->setSnake(&m_snake);
+    resetSnake();
     Shell::instance().scheduleApplication(m_gameOverApp);
 }
 
@@ -1359,13 +1366,14 @@ private:
     void exitToMainMenu()
     {
         Keypad::Listner::disableEvent(AllEvents);
+        m_snakeGameApp->resetSnake();
         Shell::instance().scheduleApplication(m_mainMenuApp);
     }
 
     void continueToSnakeGame()
     {
         Keypad::Listner::disableEvent(AllEvents);
-        m_snakeGameApp->doNotReset();
+        m_snakeGameApp->preserveSnake();
         Shell::instance().scheduleApplication(m_snakeGameApp);
     }
 
