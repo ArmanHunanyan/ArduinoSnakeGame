@@ -4,7 +4,7 @@
 #include <limits.h>
 #include <avr/sleep.h>
 
-enum class Pins : byte {
+enum class Pins : uint8_t {
     ScreenCS = 10,
     ScreenDIN = 11,
     ScreenCLK = 13,
@@ -359,6 +359,94 @@ private:
     unsigned long m_buttonPressTime[5];
 };
 
+class Point16x16
+{
+private:
+    uint8_t m_data;
+
+public:
+    Point16x16()
+        : m_data(0)
+    {}
+
+    Point16x16(uint8_t x, uint8_t y)
+    {
+        set(x, y);
+    }
+
+    void set(uint8_t x, uint8_t y)
+    {
+        m_data = 0;
+        m_data = (y << uint8_t(4)) | x;
+    }
+
+    void setX(uint8_t x)
+    {
+        m_data &= B11110000;
+        m_data |= x;
+    }
+
+    void setY(uint8_t y)
+    {
+        m_data &= B00001111;
+        m_data |= (y << uint8_t(4));
+    }
+    
+    uint8_t x() const
+    {
+        return (m_data & B00001111);
+    }
+
+    uint8_t y() const
+    {
+        return m_data >> uint8_t(4);
+    }
+
+    bool operator== (Point16x16 rhs) const
+    {
+        return m_data == rhs.m_data;
+    }
+
+    bool operator!= (Point16x16 rhs) const
+    {
+        return m_data != rhs.m_data;
+    }
+};
+
+class Size16x16
+    : private Point16x16
+{
+public:
+    using Point16x16::Point16x16;
+    using Point16x16::set;
+
+    void setWidth(uint8_t w)
+    {
+        Point16x16::setX(w);
+    }
+
+    void setHeight(uint8_t h)
+    {
+        Point16x16::setY(h);
+    }
+    
+    uint8_t width() const
+    {
+        return Point16x16::x();
+    }
+
+    uint8_t height() const
+    {
+        return Point16x16::y();
+    }
+
+    using Point16x16::operator==;
+    using Point16x16::operator!=;  
+};
+
+using Point = Point16x16;
+using Size = Size16x16;
+
 class Screen
     : public ShellObject
 {
@@ -368,15 +456,21 @@ public:
     {
     }
 
-    inline void drawPixel(int8_t x, int8_t y, uint16_t color)
+    void drawPixel(Point pt)
     {
-        m_panel.drawPixel(x, y, color);
+        m_panel.drawPixel(pt.x(), pt.y(), HIGH);
         m_modified = true;
     }
 
-    void drawChar(int8_t x, int8_t y, unsigned char ch, uint8_t size)
+    void clearPixel(Point pt)
     {
-        m_panel.drawChar(x, y, ch, HIGH, LOW, size);
+        m_panel.drawPixel(pt.x(), pt.y(), LOW);
+        m_modified = true;
+    }
+
+    void drawChar(Point pt, char ch, uint8_t size)
+    {
+        m_panel.drawChar(pt.x(), pt.y(), ch, HIGH, LOW, size);
         m_modified = true;
     }
 
@@ -391,10 +485,9 @@ public:
         m_modified = true;
     }
 
-    void drawBitmap(int8_t x, int8_t y, const uint8_t bitmap[], int8_t w,
-                  int8_t h)
+    void drawBitmap(Point pt, const uint8_t bitmap[], Size sz)
     {
-        m_panel.drawBitmap(x, y, bitmap, w, h, HIGH);
+        m_panel.drawBitmap(pt.x(), pt.y(), bitmap, sz.width(), sz.height(), HIGH);
         m_modified = true;
     }
 
@@ -451,16 +544,16 @@ public:
     virtual ~Application()
     { }
 
-    void startup()
+    void activate()
     {
         m_loopDelay = 0;
         m_lastLoopTime = ULONG_MAX;
-        onStartup();
+        onActivate();
     }
 
-    void shutdown()
+    void deactivate()
     {
-        onShutdown();
+        onDeactivate();
     }
 
     void loop()
@@ -476,6 +569,17 @@ public:
         }
     }
 
+    void prepareSleep()
+    {
+        onPrepareSleep();
+    }
+
+    void wakeUp()
+    {
+        m_lastLoopTime = ULONG_MAX;
+        onWakeUp();
+    }
+
 protected:
     void loopEvery(uint16_t delay)
     {
@@ -487,7 +591,7 @@ protected:
         return millis() - m_lastLoopTime;
     }
 
-    uint16_t loopInterval()
+    uint16_t loopDelay()
     {
         return m_loopDelay;
     }
@@ -499,16 +603,13 @@ protected:
     }
 
 private:
-    virtual void onStartup() = 0;
-    virtual void onShutdown() = 0;
+    virtual void onActivate() = 0;
+    virtual void onDeactivate() = 0;
     virtual void onLoop() = 0;
-
-public:
-    virtual void prepareSleep() = 0;
-    virtual void wakeup() = 0;
+    virtual void onPrepareSleep() = 0;
+    virtual void onWakeUp() = 0;
 
 private:
-    bool m_done;
     uint16_t m_loopDelay;
     unsigned long m_lastLoopTime;
 };
@@ -547,10 +648,14 @@ private:
     CircularQueue<Callable*, 3> m_shellEvents;
 };
 
-void wakeupInterrupt();
+void wakeUpInterrupt()
+{
+    // noop
+}
 
 class Shell
     : public Keypad::IdleListner
+    , public ShellObject
     , public ReservedEventQueue
 {
     virtual void onIdle()
@@ -560,7 +665,7 @@ class Shell
         {
             virtual void execute() final override
             {
-                Shell::instance().prepareSleep();
+                Shell::instance().onPrepareSleep();
             }
         };
         static SleepNotifierCallable notifierEvent;
@@ -586,7 +691,7 @@ class Shell
                                 break;
                             }
                         }
-                        Shell::instance().wakeup();
+                        Shell::instance().onWakeUp();
                     }
                 };
                 static NotifiWakeUpCallable event;
@@ -607,17 +712,17 @@ public:
         return m_instance;
     }
 
-    void setup()
+    void onSetup()
     {
-        pinMode((int8_t)Pins::InterruptButton, INPUT);
-        attachInterrupt(digitalPinToInterrupt((int8_t)2), wakeupInterrupt, FALLING);
+        randomSeed(analogRead((uint8_t(Pins::InterruptButton))));
+        pinMode((uint8_t)Pins::InterruptButton, INPUT);
+        attachInterrupt(digitalPinToInterrupt((uint8_t)Pins::InterruptButton), wakeUpInterrupt, FALLING);
         m_keypad.setIdleListner(this);
         m_keypad.onSetup();
         m_screen.onSetup();
-        randomSeed(analogRead(1));
     }
 
-    void loop()
+    void onLoop()
     {
         Callable *event = popNextEvent();
         if (event != nullptr) {
@@ -632,7 +737,7 @@ public:
         m_screen.onLoop();
     }
 
-    void prepareSleep()
+    void onPrepareSleep()
     {
         m_keypad.onPrepareSleep();
         if (m_currentApplication != nullptr) {
@@ -642,12 +747,12 @@ public:
         
     }
 
-    void wakeup()
+    void onWakeUp()
     {
         m_screen.onWakeUp();
         m_keypad.onWakeUp();
         if (m_currentApplication != nullptr) {
-            m_currentApplication->wakeup();
+            m_currentApplication->wakeUp();
         }
     }
 
@@ -656,12 +761,12 @@ public:
         return m_screen;
     }
 
-    void scheduleApplication(Application *app)
+    void scheduleApplication(Application* app)
     {
         struct NotifyPrevAppCallable
             : public Callable
         {
-            Application *m_app;
+            Application* m_app;
             void setApp(Application* app)
             {
                 m_app = app;
@@ -671,7 +776,7 @@ public:
             {
                 Shell::instance().m_currentApplication = nullptr;
                 Shell::instance().m_keypad.setListner(nullptr);
-                m_app->shutdown();
+                m_app->deactivate();
             }
         };
         static NotifyPrevAppCallable notifyEvent;
@@ -683,7 +788,7 @@ public:
         struct StartAppCallable
             : public Callable
         {
-            Application *m_app;
+            Application* m_app;
             void setApp(Application* app)
             {
                 m_app = app;
@@ -692,7 +797,7 @@ public:
             virtual void execute() final override
             {
                 Shell::instance().m_currentApplication = m_app;
-                Shell::instance().m_currentApplication->startup();
+                Shell::instance().m_currentApplication->activate();
                 Shell::instance().m_keypad.setListner(m_app);
             }
         };
@@ -723,7 +828,7 @@ public:
     }
 
 private:
-    virtual void onStartup() override
+    virtual void onActivate() override
     {
         Keypad::Listner::enableEvent(AllEvents);
         m_frame = 0;
@@ -746,22 +851,22 @@ private:
         exit();
     }
 
-    virtual void prepareSleep() override
+    virtual void onPrepareSleep() override
     {
 
     }
 
-    virtual void wakeup() override
+    virtual void onWakeUp() override
     {
 
     }
 
     void draw(bool a, bool r, bool m, bool o)
     {
-        if (a) Shell::instance().screen().drawChar(1, 0, 'A', 1);
-        if (r) Shell::instance().screen().drawChar(10, 0, 'R', 1);
-        if (m) Shell::instance().screen().drawChar(1, 9, 'M', 1);
-        if (o) Shell::instance().screen().drawChar(10, 9, 'O', 1);
+        if (a) Shell::instance().screen().drawChar(Point(1, 0), 'A', 1);
+        if (r) Shell::instance().screen().drawChar(Point(10, 0), 'R', 1);
+        if (m) Shell::instance().screen().drawChar(Point(1, 9), 'M', 1);
+        if (o) Shell::instance().screen().drawChar(Point(10, 9), 'O', 1);
     }
 
     virtual void onLoop() override
@@ -799,7 +904,7 @@ private:
         Shell::instance().scheduleApplication(m_next);
     }
 
-    virtual void onShutdown() override
+    virtual void onDeactivate() override
     {
 
     }
@@ -808,63 +913,6 @@ private:
     uint8_t m_frame;
     Application *m_next;
 };
-
-
-class Point16x16
-{
-private:
-    uint8_t m_data;
-
-public:
-    Point16x16()
-        : m_data(0)
-    {}
-
-    Point16x16(byte x, byte y)
-    {
-        set(x, y);
-    }
-
-    void set(byte x, byte y)
-    {
-        m_data = 0;
-        m_data = (y << byte(4)) | x;
-    }
-
-    void setX(byte x)
-    {
-        m_data &= B11110000;
-        m_data |= x;
-    }
-
-    void setY(byte y)
-    {
-        m_data &= B00001111;
-        m_data |= (y << byte(4));
-    }
-    
-    byte x() const
-    {
-        return (m_data & B00001111);
-    }
-
-    byte y() const
-    {
-        return m_data >> byte(4);
-    }
-
-    bool operator== (Point16x16 rhs) const
-    {
-        return m_data == rhs.m_data;
-    }
-
-    bool operator!= (Point16x16 rhs) const
-    {
-        return m_data != rhs.m_data;
-    }
-};
-
-using Point = Point16x16;
 
 class MainMenuApplication
     : public Application
@@ -875,8 +923,13 @@ public:
         m_next = app;
     }
 
+    void setWakeUpApplication(Application* app)
+    {
+        m_wakeUpApp = app;
+    }
+
 private:
-    virtual void onStartup() override
+    virtual void onActivate() override
     {
         Keypad::Listner::enableEvent(AllEvents);
         Shell::instance().screen().clear();
@@ -903,35 +956,35 @@ private:
         Shell::instance().screen().clear();
         for (int x = 0; x < 2; ++x) {
             for (int y = 0; y < 2; ++y) {
-                Shell::instance().screen().drawPixel(7 + x, y, HIGH);
-                Shell::instance().screen().drawPixel(7 + x, 14 + y, HIGH);
-                Shell::instance().screen().drawPixel(x, 7 + y, HIGH);
-                Shell::instance().screen().drawPixel(14 + x, 7 + y, HIGH);
+                Shell::instance().screen().drawPixel(Point(7 + x, y));
+                Shell::instance().screen().drawPixel(Point(7 + x, 14 + y));
+                Shell::instance().screen().drawPixel(Point(x, 7 + y));
+                Shell::instance().screen().drawPixel(Point(14 + x, 7 + y));
             }
         }
         if (m_frame == 0) {
-            Shell::instance().screen().drawPixel(7, 7, HIGH);
-            Shell::instance().screen().drawPixel(7, 8, HIGH);
-            Shell::instance().screen().drawPixel(8, 7, HIGH);
-            Shell::instance().screen().drawPixel(8, 8, HIGH);
+            Shell::instance().screen().drawPixel(Point(7, 7));
+            Shell::instance().screen().drawPixel(Point(7, 8));
+            Shell::instance().screen().drawPixel(Point(8, 7));
+            Shell::instance().screen().drawPixel(Point(8, 8));
         } else if (m_frame == 1) {
-            Shell::instance().screen().drawPixel(6, 7, HIGH);
-            Shell::instance().screen().drawPixel(6, 8, HIGH);
-            Shell::instance().screen().drawPixel(9, 7, HIGH);
-            Shell::instance().screen().drawPixel(9, 8, HIGH);
-            Shell::instance().screen().drawPixel(7, 6, HIGH);
-            Shell::instance().screen().drawPixel(7, 9, HIGH);
-            Shell::instance().screen().drawPixel(8, 6, HIGH);
-            Shell::instance().screen().drawPixel(8, 9, HIGH);
+            Shell::instance().screen().drawPixel(Point(6, 7));
+            Shell::instance().screen().drawPixel(Point(6, 8));
+            Shell::instance().screen().drawPixel(Point(9, 7));
+            Shell::instance().screen().drawPixel(Point(9, 8));
+            Shell::instance().screen().drawPixel(Point(7, 6));
+            Shell::instance().screen().drawPixel(Point(7, 9));
+            Shell::instance().screen().drawPixel(Point(8, 6));
+            Shell::instance().screen().drawPixel(Point(8, 9));
         } else if (m_frame == 2) {
-            Shell::instance().screen().drawPixel(5, 7, HIGH);
-            Shell::instance().screen().drawPixel(5, 8, HIGH);
-            Shell::instance().screen().drawPixel(10, 7, HIGH);
-            Shell::instance().screen().drawPixel(10, 8, HIGH);
-            Shell::instance().screen().drawPixel(7, 5, HIGH);
-            Shell::instance().screen().drawPixel(7, 10, HIGH);
-            Shell::instance().screen().drawPixel(8, 5, HIGH);
-            Shell::instance().screen().drawPixel(8, 10, HIGH);
+            Shell::instance().screen().drawPixel(Point(5, 7));
+            Shell::instance().screen().drawPixel(Point(5, 8));
+            Shell::instance().screen().drawPixel(Point(10, 7));
+            Shell::instance().screen().drawPixel(Point(10, 8));
+            Shell::instance().screen().drawPixel(Point(7, 5));
+            Shell::instance().screen().drawPixel(Point(7, 10));
+            Shell::instance().screen().drawPixel(Point(8, 5));
+            Shell::instance().screen().drawPixel(Point(8, 10));
         }
         m_frame = ++m_frame % 3;
     }
@@ -943,23 +996,23 @@ private:
 
     }
 
-    virtual void onShutdown() override
+    virtual void onDeactivate() override
     {
     }
 
-    virtual void prepareSleep() override
+    virtual void onPrepareSleep() override
     {
-
     }
 
-    virtual void wakeup() override
+    virtual void onWakeUp() override
     {
-        
+        Shell::instance().scheduleApplication(m_wakeUpApp);
     }
 
 private:
-    Application *m_next;
-    byte m_frame = 0;
+    Application* m_next;
+    Application* m_wakeUpApp;
+    uint8_t m_frame = 0;
 };
 
 using SnakeType = CircularQueue<Point, 256>;
@@ -1036,7 +1089,7 @@ public:
 private:
     using MoveDirection = Direction;
 
-    virtual void onStartup() override
+    virtual void onActivate() override
     {
         Keypad::Listner::enableEvent(AllEvents);
         startGame();
@@ -1073,9 +1126,9 @@ private:
     void drawSnakeAndApple()
     {
         for (uint16_t idx = 0; idx < m_snake.size(); ++idx) {
-            Shell::instance().screen().drawPixel(m_snake[idx].x(), m_snake[idx].y(), HIGH);
+            Shell::instance().screen().drawPixel(m_snake[idx]);
         }
-        Shell::instance().screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
+        Shell::instance().screen().drawPixel(m_apple);
     }
 
     void schedulePause()
@@ -1099,7 +1152,7 @@ private:
             return;
         }
         m_direction = btn;
-        uint16_t speed = loopInterval();
+        uint16_t speed = loopDelay();
         uint16_t timeSince = timeSinceLastLoop();
         if ((timeSince - speed) > (speed / 10)) {
             earlyLoop();
@@ -1127,12 +1180,12 @@ private:
     {
         Point newPt, oldTail;
         MoveRes moveRes = moveSnake(newPt, oldTail);
-        Shell::instance().screen().drawPixel(newPt.x(), newPt.y(), HIGH);
+        Shell::instance().screen().drawPixel(newPt);
         if (moveRes == MoveRes::Regular) {
-            Shell::instance().screen().drawPixel(oldTail.x(), oldTail.y(), LOW);
+            Shell::instance().screen().clearPixel(oldTail);
         } else if (moveRes == MoveRes::AppleHit) {
             makeApple();
-            Shell::instance().screen().drawPixel(m_apple.x(), m_apple.y(), HIGH);
+            Shell::instance().screen().drawPixel(m_apple);
         } else if (moveRes == MoveRes::SelfHit) {
             gameOver();
         }
@@ -1184,16 +1237,16 @@ private:
 
     void gameOver();
 
-    virtual void onShutdown() override
+    virtual void onDeactivate() override
     {
     }
 
-    virtual void prepareSleep() override
+    virtual void onPrepareSleep() override
     {
 
     }
 
-    virtual void wakeup() override
+    virtual void onWakeUp() override
     {
         schedulePause();
     }
@@ -1223,7 +1276,7 @@ public:
     }
 
 private:
-    virtual void onStartup() override
+    virtual void onActivate() override
     {
         Keypad::Listner::enableEvent(AllEvents);
         Shell::instance().screen().clear();
@@ -1274,10 +1327,14 @@ private:
         }
         for (int idx = 0, cnt = m_snake->size(); idx < cnt; ++idx) {
             Point pt = (*m_snake)[idx];
-            Shell::instance().screen().drawPixel(pt.x(), pt.y(), m_frame % 2 == 0 ? LOW : HIGH);
+            if (m_frame % 2 == 0) {
+                Shell::instance().screen().clearPixel(pt);
+            } else {
+                Shell::instance().screen().drawPixel(pt);
+            }
         }
         ++m_frame;
-        loopEvery(loopInterval() - (loopInterval() / 10));
+        loopEvery(loopDelay() - (loopDelay() / 10));
     }
 
     void exit()
@@ -1286,21 +1343,21 @@ private:
         Shell::instance().scheduleApplication(m_nextApp);
     }
 
-    virtual void onShutdown() override
+    virtual void onDeactivate() override
     {
     }
 
-    virtual void prepareSleep() override
+    virtual void onPrepareSleep() override
     {
     }
 
-    virtual void wakeup() override
+    virtual void onWakeUp() override
     {
     }
 
 private:
     Application *m_nextApp;
-    byte m_frame = 0;
+    uint8_t m_frame = 0;
     SnakeType *m_snake;
 };
 
@@ -1327,7 +1384,7 @@ public:
     }
 
 private:
-    virtual void onStartup() override
+    virtual void onActivate() override
     {
         Keypad::Listner::enableEvent(AllEvents);
         Shell::instance().screen().clear();
@@ -1355,11 +1412,11 @@ private:
     virtual void onLoop() override
     {
         Shell::instance().screen().clear();
-        Shell::instance().screen().drawBitmap(6, 12, X_bitmap, 4, 4);
-        Shell::instance().screen().drawBitmap(0, 7, O_bitmap, 2, 2);
-        Shell::instance().screen().drawBitmap(14, 7, O_bitmap, 2, 2);
-        Shell::instance().screen().drawBitmap(7, 0, O_bitmap, 2, 2);
-        Shell::instance().screen().drawBitmap(5, 6, Continue_bitmap, m_frame * 2, 4);
+        Shell::instance().screen().drawBitmap(Point(6, 12), X_bitmap, Size(4, 4));
+        Shell::instance().screen().drawBitmap(Point(0, 7), O_bitmap, Size(2, 2));
+        Shell::instance().screen().drawBitmap(Point(14, 7), O_bitmap, Size(2, 2));
+        Shell::instance().screen().drawBitmap(Point(7, 0), O_bitmap, Size(2, 2));
+        Shell::instance().screen().drawBitmap(Point(5, 6), Continue_bitmap, Size(m_frame * 2, 4));
         m_frame = (m_frame + 1) % 4;
     }
 
@@ -1377,15 +1434,15 @@ private:
         Shell::instance().scheduleApplication(m_snakeGameApp);
     }
 
-    virtual void onShutdown() override
+    virtual void onDeactivate() override
     {
     }
 
-    virtual void prepareSleep() override
+    virtual void onPrepareSleep() override
     {
     }
 
-    virtual void wakeup() override
+    virtual void onWakeUp() override
     {
         Shell::instance().screen().clear();
     }
@@ -1403,6 +1460,7 @@ public:
     {
         m_welcomeApp.setNextApplication(&m_mainMenuApp);
         m_mainMenuApp.setNextApplication(&m_snakeApp);
+        m_mainMenuApp.setWakeUpApplication(&m_welcomeApp);
         m_gameOverApp.setNextApplication(&m_mainMenuApp);
         m_snakeApp.setGameOverApplication(&m_gameOverApp);
         m_snakeApp.setPauseGameApplication(&m_pauseGameApp);
@@ -1421,18 +1479,13 @@ private:
 
 ApplicationLauncher appLauncher;
 
-void wakeupInterrupt()
-{
-    // noop
-}
-
 void setup() {
     Serial.begin(9600);
     Serial.println(F("----------------"));
-    Shell::instance().setup();
+    Shell::instance().onSetup();
     appLauncher.setup();
 }
 
 void loop() {
-    Shell::instance().loop();
+    Shell::instance().onLoop();
 }
