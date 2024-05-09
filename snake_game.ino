@@ -456,6 +456,12 @@ public:
     {
     }
 
+    void drawPixel(Point pt, uint8_t color)
+    {
+        m_panel.drawPixel(pt.x(), pt.y(), color);
+        m_modified = true;
+    }
+
     void drawPixel(Point pt)
     {
         m_panel.drawPixel(pt.x(), pt.y(), HIGH);
@@ -488,6 +494,12 @@ public:
     void drawBitmap(Point pt, const uint8_t bitmap[], Size sz)
     {
         m_panel.drawBitmap(pt.x(), pt.y(), bitmap, sz.width(), sz.height(), HIGH);
+        m_modified = true;
+    }
+
+    void clearBitmap(Point pt, const uint8_t bitmap[], Size sz)
+    {
+        m_panel.drawBitmap(pt.x(), pt.y(), bitmap, sz.width(), sz.height(), LOW);
         m_modified = true;
     }
 
@@ -756,7 +768,7 @@ public:
         }
     }
 
-    Screen &screen()
+    Screen& screen()
     {
         return m_screen;
     }
@@ -814,17 +826,30 @@ private:
 
 Shell Shell::m_instance;
 
-static PROGMEM const uint8_t X_bitmap[] = {B10010000, B01100000, B01100000, B10010000};
-static PROGMEM const uint8_t O_bitmap[] = {B11000000, B11000000};
-static PROGMEM const uint8_t Continue_bitmap[] = {B10101000, B01010100, B01010100, B10101000};
-
 class WelcomeApplication
     : public Application
 {
 public:
     void setNextApplication(Application *app)
     {
-        m_next = app;
+        m_nextApp = app;
+    }
+
+private:
+    // Key handlers
+    virtual void onKeyPress(Keypad::Button btn) override
+    {
+        // noop
+    }
+
+    virtual void onLongKeyPress(Keypad::Button btn) override
+    {
+        // noop
+    }
+
+    virtual void onKeyRelease(Keypad::Button btn) override
+    {
+        exit();
     }
 
 private:
@@ -836,29 +861,19 @@ private:
         Shell::instance().screen().clear();
     }
 
-    virtual void onKeyPress(Keypad::Button btn) override
+    virtual void onDeactivate() override
     {
-        exit();
-    }
-
-    virtual void onLongKeyPress(Keypad::Button btn) override
-    {
-        exit();
-    }
-
-    virtual void onKeyRelease(Keypad::Button btn) override
-    {
-        exit();
+        // noop
     }
 
     virtual void onPrepareSleep() override
     {
-
+        // noop
     }
 
     virtual void onWakeUp() override
     {
-
+        // noop
     }
 
     void draw(bool a, bool r, bool m, bool o)
@@ -880,18 +895,12 @@ private:
         } else if (m_frame == 3) {
             draw(true, true, true, true);
             loopEvery(250);
-        } else if (m_frame == 4) {
-            Shell::instance().screen().clear();
-        } else if (m_frame == 5) {
-            draw(true, true, true, true);
-        } else if (m_frame == 6) {
-            Shell::instance().screen().clear();
-        } else if (m_frame == 7) {
-            draw(true, true, true, true);
-        } else if (m_frame == 8) {
-            Shell::instance().screen().clear();
-        } else if (m_frame == 9) {
-            draw(true, true, true, true);
+        } else if (m_frame <= 9) {
+            if ((m_frame % 2) == 0) {
+                Shell::instance().screen().clear();
+            } else {
+                draw(true, true, true, true);
+            }
         } else {
             exit();
         }
@@ -901,26 +910,25 @@ private:
     void exit()
     {
         Keypad::Listner::disableEvent(AllEvents);
-        Shell::instance().scheduleApplication(m_next);
-    }
-
-    virtual void onDeactivate() override
-    {
-
+        Shell::instance().scheduleApplication(m_nextApp);
     }
 
 private:
     uint8_t m_frame;
-    Application *m_next;
+    Application *m_nextApp;
 };
+
+static PROGMEM const uint8_t X_bitmap[] = {B10010000, B01100000, B01100000, B10010000};
+static PROGMEM const uint8_t O_bitmap[] = {B11000000, B11000000};
+static PROGMEM const uint8_t Continue_bitmap[] = {B10101000, B01010100, B01010100, B10101000};
 
 class MainMenuApplication
     : public Application
 {
 public:
-    void setNextApplication(Application *app)
+    void setNextApplication(Application* app)
     {
-        m_next = app;
+        m_nextApp = app;
     }
 
     void setWakeUpApplication(Application* app)
@@ -931,86 +939,75 @@ public:
 private:
     virtual void onActivate() override
     {
+        m_frame = 255;
         Keypad::Listner::enableEvent(AllEvents);
         Shell::instance().screen().clear();
         loopEvery(500);
     }
 
+    virtual void onDeactivate() override
+    {
+        // noop
+    }
+
     virtual void onKeyPress(Keypad::Button btn) override
+    {
+        // noop
+    }
+
+    virtual void onLongKeyPress(Keypad::Button btn) override
+    {
+        // noop
+    }
+
+    virtual void onKeyRelease(Keypad::Button btn) override
     {
         if (btn == Keypad::Button::Center) {
             exit();
         }
     }
 
-    virtual void onLongKeyPress(Keypad::Button btn) override
-    {
-    }
-
-    virtual void onKeyRelease(Keypad::Button btn) override
-    {
-    }
-
     virtual void onLoop() override
     {
-        Shell::instance().screen().clear();
-        for (int x = 0; x < 2; ++x) {
-            for (int y = 0; y < 2; ++y) {
-                Shell::instance().screen().drawPixel(Point(7 + x, y));
-                Shell::instance().screen().drawPixel(Point(7 + x, 14 + y));
-                Shell::instance().screen().drawPixel(Point(x, 7 + y));
-                Shell::instance().screen().drawPixel(Point(14 + x, 7 + y));
-            }
+        if (m_frame == 255) { // draw static pixels only once
+            Shell::instance().screen().drawBitmap(Point(0, 7), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(14, 7), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(7, 0), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(7, 14), O_bitmap, Size(2, 2));
+            m_frame = 2;
         }
-        if (m_frame == 0) {
-            Shell::instance().screen().drawPixel(Point(7, 7));
-            Shell::instance().screen().drawPixel(Point(7, 8));
-            Shell::instance().screen().drawPixel(Point(8, 7));
-            Shell::instance().screen().drawPixel(Point(8, 8));
-        } else if (m_frame == 1) {
-            Shell::instance().screen().drawPixel(Point(6, 7));
-            Shell::instance().screen().drawPixel(Point(6, 8));
-            Shell::instance().screen().drawPixel(Point(9, 7));
-            Shell::instance().screen().drawPixel(Point(9, 8));
-            Shell::instance().screen().drawPixel(Point(7, 6));
-            Shell::instance().screen().drawPixel(Point(7, 9));
-            Shell::instance().screen().drawPixel(Point(8, 6));
-            Shell::instance().screen().drawPixel(Point(8, 9));
-        } else if (m_frame == 2) {
-            Shell::instance().screen().drawPixel(Point(5, 7));
-            Shell::instance().screen().drawPixel(Point(5, 8));
-            Shell::instance().screen().drawPixel(Point(10, 7));
-            Shell::instance().screen().drawPixel(Point(10, 8));
-            Shell::instance().screen().drawPixel(Point(7, 5));
-            Shell::instance().screen().drawPixel(Point(7, 10));
-            Shell::instance().screen().drawPixel(Point(8, 5));
-            Shell::instance().screen().drawPixel(Point(8, 10));
+        uint8_t oldFrame = m_frame;
+        m_frame = (m_frame + uint8_t(1)) % uint8_t(3);
+        auto draw_point_and_mirrored = [] (Point pt, uint8_t color) {
+            Shell::instance().screen().drawPixel(pt, color);
+            Shell::instance().screen().drawPixel(Point(pt.y(), pt.x()), color);
+        };
+        for (uint8_t y = 7; y <= 8; ++y) {
+            draw_point_and_mirrored(Point(7 - oldFrame, y), LOW);
+            draw_point_and_mirrored(Point(8 + oldFrame, y), LOW);
+            draw_point_and_mirrored(Point(7 - m_frame, y), HIGH);
+            draw_point_and_mirrored(Point(8 + m_frame, y), HIGH);
         }
-        m_frame = ++m_frame % 3;
     }
 
     void exit()
     {
         Keypad::Listner::disableEvent(AllEvents);
-        Shell::instance().scheduleApplication(m_next);
-
-    }
-
-    virtual void onDeactivate() override
-    {
+        Shell::instance().scheduleApplication(m_nextApp);
     }
 
     virtual void onPrepareSleep() override
     {
+        // noop
     }
 
     virtual void onWakeUp() override
     {
-        Shell::instance().scheduleApplication(m_wakeUpApp);
+        m_frame = 255;
     }
 
 private:
-    Application* m_next;
+    Application* m_nextApp;
     Application* m_wakeUpApp;
     uint8_t m_frame = 0;
 };
@@ -1386,10 +1383,10 @@ public:
 private:
     virtual void onActivate() override
     {
+        m_frame = 255;
         Keypad::Listner::enableEvent(AllEvents);
         Shell::instance().screen().clear();
         loopEvery(400);
-        m_frame = 0;
     }
 
     virtual void onKeyPress(Keypad::Button btn) override
@@ -1411,13 +1408,16 @@ private:
 
     virtual void onLoop() override
     {
-        Shell::instance().screen().clear();
-        Shell::instance().screen().drawBitmap(Point(6, 12), X_bitmap, Size(4, 4));
-        Shell::instance().screen().drawBitmap(Point(0, 7), O_bitmap, Size(2, 2));
-        Shell::instance().screen().drawBitmap(Point(14, 7), O_bitmap, Size(2, 2));
-        Shell::instance().screen().drawBitmap(Point(7, 0), O_bitmap, Size(2, 2));
+        if (m_frame == 255) { // draw static pixels only once
+            Shell::instance().screen().drawBitmap(Point(0, 7), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(14, 7), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(7, 0), O_bitmap, Size(2, 2));
+            Shell::instance().screen().drawBitmap(Point(6, 12), X_bitmap, Size(4, 4));
+            m_frame = 0;
+        }
+        Shell::instance().screen().clearBitmap(Point(5, 6), Continue_bitmap, Size(m_frame * 2, 4));
+        m_frame = (m_frame + 1) % 4; 
         Shell::instance().screen().drawBitmap(Point(5, 6), Continue_bitmap, Size(m_frame * 2, 4));
-        m_frame = (m_frame + 1) % 4;
     }
 
     void exitToMainMenu()
@@ -1444,7 +1444,7 @@ private:
 
     virtual void onWakeUp() override
     {
-        Shell::instance().screen().clear();
+        m_frame = 255;
     }
 
 private:
