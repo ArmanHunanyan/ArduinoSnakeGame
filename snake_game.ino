@@ -1024,6 +1024,7 @@ public:
 
     inline void set(const SnakeType &pts)
     {
+        memset(m_bits, 0, sizeof(m_bits) * sizeof(m_bits[0]));
         for (uint16_t idx = 0, count = pts.size(); idx < count; ++idx) {
             m_bits[pts[idx].y()] |= (uint16_t(1) << pts[idx].x());
         }
