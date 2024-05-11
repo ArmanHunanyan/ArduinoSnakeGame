@@ -1062,6 +1062,9 @@ public:
             }
             return sy + rad;
         };
+        if ((m_bits[seed.y()] & (uint16_t(1) << seed.x())) == 0) {
+            return seed;
+        }
         while (true) {
             for (uint8_t x = startX(rad), lastX = endX(rad); x <= lastX; ++x) {
                 for (uint8_t y = startY(rad), lastY = endY(rad); y <= lastY; ++y) {
