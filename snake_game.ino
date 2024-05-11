@@ -1037,19 +1037,40 @@ public:
 
     Point findFreePoint(Point seed) 
     {
-        for (uint8_t x = seed.x(); x < 16; ++x) {
-            for (uint8_t y = seed.y(); y < 16; ++y) {
-                if ((m_bits[y] & (uint16_t(1) << x)) == 0) {
-                    return Point(x, y);
-                }
+        uint8_t rad = 1;
+        auto startX = [sx = seed.x()] (uint8_t rad) {
+            if (rad > sx) {
+                return 0;
             }
-        }
-        for (uint8_t x = 0, xc = seed.x(); x < xc; ++x) {
-            for (uint8_t y = 0, yc = seed.y(); y < yc; ++y) {
-                if ((m_bits[y] & (uint16_t(1) << x)) == 0) {
-                    return Point(x, y);
-                }
+            return sx - rad;
+        };
+        auto startY = [sy = seed.y()] (uint8_t rad) {
+            if (rad > sy) {
+                return 0;
             }
+            return sy - rad;
+        };
+        auto endX = [sx = seed.x()] (uint8_t rad) {
+            if (rad + sx > 15) {
+                return 15;
+            }
+            return sx + rad;
+        };
+        auto endY = [sy = seed.y()] (uint8_t rad) {
+            if (rad + sy > 15) {
+                return 15;
+            }
+            return sy + rad;
+        };
+        while (true) {
+            for (uint8_t x = startX(rad), lastX = endX(rad); x <= lastX; ++x) {
+                for (uint8_t y = startY(rad), lastY = endY(rad); y <= lastY; ++y) {
+                    if ((m_bits[y] & (uint16_t(1) << x)) == 0) {
+                        return Point(x, y);
+                    }
+                }    
+            }
+            ++rad;
         }
         return Point(0, 0);
     }
