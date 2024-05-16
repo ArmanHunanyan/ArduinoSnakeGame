@@ -513,14 +513,14 @@ public:
     {
         m_panel.fillScreen(LOW);
         m_panel.setIntensity(10);
-        m_panel.setPosition(0, 1, 0);
-        m_panel.setPosition(1, 1, 1);
-        m_panel.setPosition(2, 0, 0);
-        m_panel.setPosition(3, 0, 1);
-        m_panel.setRotation(1, 0);
-        m_panel.setRotation(3, 0);
-        m_panel.setRotation(0, 0);
-        m_panel.setRotation(2, 0);
+        m_panel.setPosition(0, 0, 1);
+        m_panel.setPosition(1, 0, 0);
+        m_panel.setPosition(2, 1, 1);
+        m_panel.setPosition(3, 1, 0);
+        m_panel.setRotation(1, 2);
+        m_panel.setRotation(3, 2);
+        m_panel.setRotation(0, 2);
+        m_panel.setRotation(2, 2);
     }
 
     virtual void onLoop() final override // must be the last call in the system
@@ -1035,45 +1035,31 @@ public:
         m_bits[pt.y()] |= (uint16_t(1) << pt.x());
     }
 
-    Point findFreePoint(Point seed) 
+    bool check(Point pt) const
     {
-        uint8_t rad = 1;
-        auto startX = [sx = seed.x()] (uint8_t rad) {
-            if (rad > sx) {
-                return 0;
-            }
-            return sx - rad;
-        };
-        auto startY = [sy = seed.y()] (uint8_t rad) {
-            if (rad > sy) {
-                return 0;
-            }
-            return sy - rad;
-        };
-        auto endX = [sx = seed.x()] (uint8_t rad) {
-            if (rad + sx > 15) {
-                return 15;
-            }
-            return sx + rad;
-        };
-        auto endY = [sy = seed.y()] (uint8_t rad) {
-            if (rad + sy > 15) {
-                return 15;
-            }
-            return sy + rad;
-        };
-        if ((m_bits[seed.y()] & (uint16_t(1) << seed.x())) == 0) {
+        return (m_bits[pt.y()] & (uint16_t(1) << pt.x())) != 0;
+    }
+
+    Point findFreePoint(Point seed) const
+    {
+        if (!check(seed)) {
             return seed;
         }
-        while (true) {
-            for (uint8_t x = startX(rad), lastX = endX(rad); x <= lastX; ++x) {
-                for (uint8_t y = startY(rad), lastY = endY(rad); y <= lastY; ++y) {
-                    if ((m_bits[y] & (uint16_t(1) << x)) == 0) {
-                        return Point(x, y);
-                    }
-                }    
+
+        uint8_t prime[] = { 3, 5, 7, 11, 13 };
+
+        uint8_t seedX = random(16);
+        uint8_t jumpX = prime[random(5)];
+        for (uint8_t i = 0, x = seedX; i < 16; ++i) {
+            uint8_t seedY = random(16);
+            uint8_t jumpY = prime[random(5)];
+            for (uint8_t j = 0, y = seedY; j < 16; ++j) {
+                if (!check(Point(x, y))) {
+                    return Point(x, y);
+                }
+                y = (y + jumpY) % 16;
             }
-            ++rad;
+            x = (x + jumpX) % 16;
         }
         return Point(0, 0);
     }
@@ -1140,9 +1126,15 @@ private:
         uint8_t x, y;
         x = rnd / 16;
         y = rnd % 16;
+        Serial.print(x);
+        Serial.print(" ");
+        Serial.println(y);
         static Board16x16 board;
         board.set(m_snake);
         m_apple = board.findFreePoint(Point(x, y));
+        Serial.print(m_apple.x());
+        Serial.print(" ");
+        Serial.println(m_apple.y());
     }
 
     void drawSnakeAndApple()
@@ -1203,6 +1195,7 @@ private:
         Point newPt, oldTail;
         MoveRes moveRes = moveSnake(newPt, oldTail);
         Shell::instance().screen().drawPixel(newPt);
+        Shell::instance().screen().drawPixel(m_apple);
         if (moveRes == MoveRes::Regular) {
             Shell::instance().screen().clearPixel(oldTail);
         } else if (moveRes == MoveRes::AppleHit) {
